@@ -4,52 +4,76 @@ import torch.nn.functional as F
 from src.config import NUM_CLASSES, DEVICE
 
 class GatingNetwork(nn.Module):
-    def __init__(self, input_shape, num_learners):
+    def __init__(self, input_shape, num_learners, hidden_dim=256, dropout=0.1):
         """
-        CNN-based Gating Network to select top-k weak learners.
+        MLP-based Gating Network to select top-k weak learners.
         
         Args:
-            input_shape (tuple): (packet_num, num_features)
-            num_learners (int): Number of weak learners T in AdaBoost.
+            input_shape: (packet_num, num_features)
+            num_learners: Number of weak learners (n experts)
+            hidden_dim: Hidden layer dimension
+            dropout: Dropout rate
         """
         super(GatingNetwork, self).__init__()
         
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        flatten_dim = input_shape[0] * input_shape[1]
         
-        self.flatten_dim = self._get_flatten_dim(input_shape)
+        self.net = nn.Sequential(
+            nn.Linear(flatten_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, num_learners)
+        )
         
-        self.fc1 = nn.Linear(self.flatten_dim, 256)
-        self.dropout1 = nn.Dropout(0.3)
-        self.fc2 = nn.Linear(256, 128)
-        self.dropout2 = nn.Dropout(0.3)
-        self.fc3 = nn.Linear(128, num_learners)
-        
-    def _get_flatten_dim(self, input_shape):
-        with torch.no_grad():
-            x = torch.zeros(1, 1, *input_shape)
-            x = self.pool(F.relu(self.conv1(x)))
-            x = self.pool(F.relu(self.conv2(x)))
-            x = F.relu(self.conv3(x))
-            x = self.pool(x)
-            return x.numel()
-            
     def forward(self, x):
         if x.dim() == 3:
-            x = x.unsqueeze(1)
+            x = x.reshape(x.size(0), -1)
+        elif x.dim() == 4:
+            x = x.reshape(x.size(0), -1)
         
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = F.relu(self.conv3(x))
-        x = self.pool(x)
+        return self.net(x)
+
+
+class NoisyTopKGating(nn.Module):
+    """Noisy Top-K Gating (GShard style) - adds noise for exploration"""
+    def __init__(self, input_shape, num_learners, hidden_dim=256, noise_std=1.0, dropout=0.1):
+        super(NoisyTopKGating, self).__init__()
         
-        x = torch.flatten(x, start_dim=1)
-        x = F.relu(self.fc1(x))
-        x = self.dropout1(x)
-        x = F.relu(self.fc2(x))
-        x = self.dropout2(x)
-        x = self.fc3(x)
+        flatten_dim = input_shape[0] * input_shape[1]
+        self.noise_std = noise_std
         
-        return x
+        self.w_gate = nn.Sequential(
+            nn.Linear(flatten_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, num_learners)
+        )
+        
+        self.w_noise = nn.Sequential(
+            nn.Linear(flatten_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, num_learners)
+        )
+    
+    def forward(self, x, training=True):
+        if x.dim() == 3:
+            x = x.reshape(x.size(0), -1)
+        elif x.dim() == 4:
+            x = x.reshape(x.size(0), -1)
+        
+        logits = self.w_gate(x)
+        
+        if training:
+            noise_scale = F.softplus(self.w_noise(x)) + 1e-2
+            noise = torch.randn_like(logits) * noise_scale * self.noise_std
+            logits = logits + noise
+        
+        return logits
