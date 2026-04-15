@@ -57,10 +57,29 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
         for i, row in enumerate(top_k_idx):
             binary_labels[i, row] = 1.0
         
-        binary_labels_tensor = torch.from_numpy(binary_labels).float().to(DEVICE)
+        # Split into train and validation
+        n_samples = len(X_combined)
+        n_val = int(n_samples * GATING_VAL_RATIO)
+        indices = np.random.permutation(n_samples)
+        val_idx = indices[:n_val]
+        train_idx = indices[n_val:]
         
-        X_dataset = ETCDataset(X_combined, y_combined)
-        dataloader = DataLoader(X_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+        X_train_split = X_combined[train_idx]
+        X_val = X_combined[val_idx]
+        binary_train = binary_labels[train_idx]
+        binary_val = binary_labels[val_idx]
+        
+        print(f"  Train: {len(train_idx)}, Val: {len(val_idx)}")
+        
+        binary_train_tensor = torch.from_numpy(binary_train).float().to(DEVICE)
+        binary_val_tensor = torch.from_numpy(binary_val).float().to(DEVICE)
+        
+        train_dataset = ETCDataset(X_train_split, y_combined[train_idx])
+        val_dataset = ETCDataset(X_val, y_combined[val_idx])
+        
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                                 num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
                                num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
         
         self.gate = GatingNetwork(input_shape=X_train[0].shape, num_learners=self.n_estimators).to(DEVICE)
@@ -68,18 +87,24 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
         criterion = nn.BCEWithLogitsLoss()
         
         print("Training Gating Network (multi-label)...")
-        self.gate.train()
+        
+        best_val_loss = float('inf')
+        best_gate_state = None
+        patience_counter = 0
+        
         for epoch in range(GATING_EPOCHS):
-            total_loss = 0
-            correct = 0
-            total = 0
+            # Training
+            self.gate.train()
+            train_loss = 0
+            train_correct = 0
+            train_total = 0
             
-            for i, (data, _) in enumerate(dataloader):
+            for i, (data, _) in enumerate(train_loader):
                 data = data.to(DEVICE)
                 batch_idx = i * BATCH_SIZE
-                if batch_idx >= len(binary_labels_tensor):
+                if batch_idx >= len(binary_train_tensor):
                     break
-                batch_labels = binary_labels_tensor[batch_idx : batch_idx + BATCH_SIZE]
+                batch_labels = binary_train_tensor[batch_idx : batch_idx + BATCH_SIZE]
                 if batch_labels.size(0) == 0:
                     continue
                 
@@ -90,22 +115,70 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
                 loss.backward()
                 optimizer.step()
                 
-                total_loss += loss.item()
+                train_loss += loss.item()
                 
-                # Calculate top-k accuracy (how often correct learners are in predicted top-k)
                 p_probs = torch.sigmoid(p_logits)
                 _, topk_pred = torch.topk(p_probs, k, dim=1)
-                batch_range = torch.arange(batch_labels.size(0)).to(DEVICE)
-                # Check if target learners are in predicted top-k
                 for b in range(batch_labels.size(0)):
                     target_set = set(torch.where(batch_labels[b] > 0.5)[0].tolist())
                     pred_set = set(topk_pred[b].tolist())
-                    if target_set & pred_set:  # intersection
-                        correct += 1
-                    total += 1
+                    if target_set & pred_set:
+                        train_correct += 1
+                    train_total += 1
             
-            accuracy = 100 * correct / total if total > 0 else 0
-            print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {total_loss/max(1, len(dataloader)):.4f}, Top-{k} Acc: {accuracy:.2f}%")
+            train_acc = 100 * train_correct / train_total if train_total > 0 else 0
+            train_loss = train_loss / max(1, len(train_loader))
+            
+            # Validation
+            self.gate.eval()
+            val_loss = 0
+            val_correct = 0
+            val_total = 0
+            
+            with torch.no_grad():
+                for i, (data, _) in enumerate(val_loader):
+                    data = data.to(DEVICE)
+                    batch_idx = i * BATCH_SIZE
+                    if batch_idx >= len(binary_val_tensor):
+                        break
+                    batch_labels = binary_val_tensor[batch_idx : batch_idx + BATCH_SIZE]
+                    if batch_labels.size(0) == 0:
+                        continue
+                    
+                    p_logits = self.gate(data)
+                    loss = criterion(p_logits, batch_labels)
+                    val_loss += loss.item()
+                    
+                    p_probs = torch.sigmoid(p_logits)
+                    _, topk_pred = torch.topk(p_probs, k, dim=1)
+                    for b in range(batch_labels.size(0)):
+                        target_set = set(torch.where(batch_labels[b] > 0.5)[0].tolist())
+                        pred_set = set(topk_pred[b].tolist())
+                        if target_set & pred_set:
+                            val_correct += 1
+                        val_total += 1
+            
+            val_acc = 100 * val_correct / val_total if val_total > 0 else 0
+            val_loss = val_loss / max(1, len(val_loader))
+            
+            print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+            
+            # Early stopping check
+            if val_loss < best_val_loss - GATING_MIN_DELTA:
+                best_val_loss = val_loss
+                best_gate_state = {k: v.cpu().clone() for k, v in self.gate.state_dict().items()}
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= GATING_PATIENCE:
+                    print(f"Early stopping at epoch {epoch+1}. Best val loss: {best_val_loss:.4f}")
+                    break
+        
+        # Restore best model
+        if best_gate_state is not None:
+            self.gate.load_state_dict(best_gate_state)
+            self.gate.to(DEVICE)
+            print(f"Restored best model with val loss: {best_val_loss:.4f}")
     
     def predict_sparse(self, X_test, k=None, return_time=False):
         """
