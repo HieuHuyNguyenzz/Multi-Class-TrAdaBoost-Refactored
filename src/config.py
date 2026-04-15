@@ -28,7 +28,7 @@ BATCH_SIZE = 64
 NUM_WORKERS = 0  # Set to 0 to avoid multiprocessing issues on Mac
 
 # Gated AdaBoost Settings
-GATING_K = 3 # Top-k learners to select
+GATING_K = 5 # Top-k learners to select
 GATING_TAU = 1.0 # Temperature for softmax
 GATING_LR = 1e-3
 GATING_WEIGHT_DECAY = 1e-2
@@ -55,4 +55,4 @@ else:
 DATA_DIR = "Data"
 SOURCE_PATH = f"{DATA_DIR}/Domain 1_32.feather"
 TARGET_PATH = f"{DATA_DIR}/Domain 2_32.feather"
-TARGET_TEST_RATIO = 0.95  # 95% of target domain for testing (only 5% for training - limited target data scenario)
+TARGET_TEST_RATIO = 0.99  # 95% of target domain for testing (only 5% for training - limited target data scenario)
