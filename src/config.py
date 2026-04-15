@@ -10,7 +10,7 @@ BATCH_SIZE = 64  # Increased for better GPU utilization on M-series
 SEED = 42
 
 # DataLoader Settings for Apple Silicon
-NUM_WORKERS = 4  # Parallel data loading for faster preprocessing
+NUM_WORKERS = 0  # Set to 0 to avoid multiprocessing issues on Mac
 
 # Gated AdaBoost Settings
 GATING_K = 3 # Top-k learners to select

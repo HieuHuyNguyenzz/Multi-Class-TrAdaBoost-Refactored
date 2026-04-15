@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import time
 from torch.utils.data import DataLoader
 from src.config import (
     DEVICE, BATCH_SIZE, NUM_CLASSES, 
@@ -64,12 +65,14 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
                 
             print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {total_loss/len(dataloader):.4f}")
     
-    def predict_sparse(self, X_test, k=None):
+    def predict_sparse(self, X_test, k=None, return_time=False):
         """
         Gated Sparse Inference prediction.
+        
         Args:
             X_test: Test data.
             k (int, optional): Number of top learners to select. Defaults to GATING_K from config.
+            return_time: If True, returns (predictions, avg_time_per_sample_ms)
         """
         if self.gate is None:
             raise ValueError("Gating network not trained. Call train_gate first.")
@@ -80,7 +83,18 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
         X_test_tensor = torch.from_numpy(X_test).float().to(DEVICE)
         if X_test_tensor.dim() == 3:
             X_test_tensor = X_test_tensor.unsqueeze(1)
-            
+        
+        # Warm up
+        if DEVICE.type == 'mps':
+            with torch.no_grad():
+                _ = self.gate(X_test_tensor[:1])
+                if len(self.learners) > 0:
+                    _ = self.learners[0](X_test_tensor[:1])
+                torch.mps.synchronize()
+        
+        # Start timing
+        start_time = time.time()
+        
         self.gate.eval()
         with torch.no_grad():
             g_scores = []
@@ -117,8 +131,20 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
                 alpha_t = self.alphas[t]
                 for idx, pred in zip(indices, preds_masked):
                     vote_matrix[idx, pred] += alpha_t
-                    
-        return np.argmax(vote_matrix, axis=1)
+        
+        # Synchronize
+        if DEVICE.type == 'mps':
+            torch.mps.synchronize()
+        
+        end_time = time.time()
+        total_time_ms = (end_time - start_time) * 1000
+        avg_time_per_sample_ms = total_time_ms / X_test.shape[0]
+        
+        predictions = np.argmax(vote_matrix, axis=1)
+        
+        if return_time:
+            return predictions, avg_time_per_sample_ms
+        return predictions
 
     def save(self, path, input_shape):
         """Saves the gated ensemble model to a file."""

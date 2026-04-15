@@ -40,6 +40,14 @@ def main():
     ORIG_MODEL_PATH = "model_orig.pth"
     GATED_MODEL_PATH = "model_gated.pth"
     
+    # Always train from scratch (delete existing models for training modes)
+    if args.mode in ['train_full', 'tradaboost_only']:
+        if os.path.exists(ORIG_MODEL_PATH):
+            print("Removing existing model files...")
+            os.remove(ORIG_MODEL_PATH)
+        if os.path.exists(GATED_MODEL_PATH):
+            os.remove(GATED_MODEL_PATH)
+    
     # --- Setup Models ---
     model_orig = MultiClassTrAdaBoostCNN(CNNModel, n_estimators=10)
     
@@ -63,8 +71,9 @@ def main():
     print("\n" + "="*60)
     print(" EVALUATION: Original Multi-class TrAdaBoost-CNN ")
     print("="*60)
-    orig_predictions = model_orig.predict(test_X)
+    orig_predictions, orig_time = model_orig.predict(test_X, return_time=True)
     print(classification_report(test_y, orig_predictions))
+    print(f"\n>>> Inference Time: {orig_time:.4f} ms/sample ({model_orig.n_estimators} learners)")
     
     # If only TrAdaBoost requested, stop here
     if args.mode == 'tradaboost_only':
@@ -112,8 +121,9 @@ def main():
         
         # Gated Model (Full mode)
         print("\n[1] Gated Model (Running in Full Mode):")
-        gated_full_predictions = model_gated.predict(test_X)
+        gated_full_predictions, gated_full_time = model_gated.predict(test_X, return_time=True)
         print(classification_report(test_y, gated_full_predictions))
+        print(f"\n>>> Inference Time: {gated_full_time:.4f} ms/sample ({model_gated.n_estimators} learners)")
 
     # Scenario B: WITH GATING (Sparse Inference)
     if args.mode in ['test_with_gating', 'test', 'train_full', 'train_gate']:
@@ -125,9 +135,10 @@ def main():
         k_values = [min(k, model_gated.n_estimators) for k in k_values]
         
         for k in k_values:
-            gated_sparse_predictions = model_gated.predict_sparse(test_X, k=k)
+            gated_sparse_predictions, sparse_time = model_gated.predict_sparse(test_X, k=k, return_time=True)
             print(f"\n--- Gated Sparse AdaBoost (k={k}) ---")
             print(classification_report(test_y, gated_sparse_predictions))
+            print(f">>> Inference Time: {sparse_time:.4f} ms/sample ({k} learners)")
 
 if __name__ == "__main__":
     main()

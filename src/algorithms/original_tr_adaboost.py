@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import time
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from src.config import DEVICE, BATCH_SIZE, NUM_EPOCHS, NUM_CLASSES, NUM_WORKERS
 from src.utils.dataset import ETCDataset
@@ -134,14 +135,31 @@ class MultiClassTrAdaBoostCNN:
         
         return np.array(all_preds).T # (samples, T)
     
-    def predict(self, X_test):
+    def predict(self, X_test, return_time=False):
         """
         Final hypothesis: h_f(x) = argmax_k sum(alpha_t * I(h_t(x) = k))
+        
+        Args:
+            X_test: Test data array
+            return_time: If True, returns (predictions, avg_time_per_sample_ms)
         """
         X_test_tensor = torch.from_numpy(X_test).float().to(DEVICE)
         if X_test_tensor.dim() == 3:
             X_test_tensor = X_test_tensor.unsqueeze(1)
-            
+        
+        # Warm up (run a few passes to stabilize timing)
+        n_warmup = min(10, X_test_tensor.size(0))
+        with torch.no_grad():
+            for i in range(n_warmup):
+                _ = self.learners[0](X_test_tensor[i:i+1])
+        
+        # Synchronize before timing
+        if DEVICE.type == 'mps':
+            torch.mps.synchronize()
+        
+        # Start timing
+        start_time = time.time()
+        
         vote_matrix = np.zeros((X_test.shape[0], NUM_CLASSES))
         
         with torch.no_grad():
@@ -155,8 +173,20 @@ class MultiClassTrAdaBoostCNN:
                 preds = np.concatenate(outputs)
                 for cls in range(NUM_CLASSES):
                     vote_matrix[preds == cls, cls] += alpha_t
-                    
-        return np.argmax(vote_matrix, axis=1)
+        
+        # Synchronize after timing
+        if DEVICE.type == 'mps':
+            torch.mps.synchronize()
+        
+        end_time = time.time()
+        total_time_ms = (end_time - start_time) * 1000
+        avg_time_per_sample_ms = total_time_ms / X_test.shape[0]
+        
+        predictions = np.argmax(vote_matrix, axis=1)
+        
+        if return_time:
+            return predictions, avg_time_per_sample_ms
+        return predictions
 
     def save(self, path, input_shape):
         """Saves the ensemble model to a file."""
