@@ -2,11 +2,14 @@ import numpy as np
 import os
 import argparse
 from sklearn.metrics import classification_report
-from src.config import SOURCE_PATH, TARGET_PATH, TARGET_TEST_RATIO, DEVICE
+from src.config import SOURCE_PATH, TARGET_PATH, TARGET_TEST_RATIO, DEVICE, set_seed, SEED
 from src.utils.data_loader import load_source_data, load_target_data
 from src.models.cnn_model import CNNModel
 from src.algorithms.original_tr_adaboost import MultiClassTrAdaBoostCNN
 from src.algorithms.gated_tr_adaboost import GatedMultiClassTrAdaBoostCNN
+
+# Set seeds for reproducibility before any training
+set_seed(SEED)
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-Class TrAdaBoost-CNN Training and Evaluation")
@@ -81,10 +84,14 @@ def main():
     
     # 2. Handle Gated Model (for modes beyond tradaboost_only)
     if args.mode == 'train_full':
-        print("\nTraining Gated Model (Base Ensemble)...")
-        model_gated.fit(target_train_X, target_train_y, source_X, source_y)
+        # Reuse learners from model_orig instead of training from scratch
+        print("\nReusing learners from Original model for Gated model...")
+        model_gated.learners = model_orig.learners
+        model_gated.alphas = model_orig.alphas
+        model_gated.n_estimators = model_orig.n_estimators
+        
         print("\nTraining Gating Network for Sparse Inference...")
-        model_gated.train_gate(target_train_X, target_train_y)
+        model_gated.train_gate(target_train_X, target_train_y, source_X, source_y)
         model_gated.save(GATED_MODEL_PATH, input_shape)
         
     elif args.mode == 'train_gate':
@@ -101,7 +108,7 @@ def main():
             return
             
         print("\nRe-training Gating Network...")
-        model_gated.train_gate(target_train_X, target_train_y)
+        model_gated.train_gate(target_train_X, target_train_y, source_X, source_y)
         model_gated.save(GATED_MODEL_PATH, input_shape)
     else:
         if os.path.exists(GATED_MODEL_PATH):

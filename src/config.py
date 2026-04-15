@@ -1,13 +1,28 @@
+import random
 import torch
+import numpy as np
+
+# Set seeds for reproducibility
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.mps.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+SEED = 42
+set_seed(SEED)
 
 # General Settings
-NUM_FEATURE = 32  # Updated for new data format (32 features instead of 256)
+NUM_FEATURE = 32
 NUM_CLASSES = 3
 PACKET_NUM = 20
-CLIENT_LR = 1e-4
+CLIENT_LR = 1e-3
 NUM_EPOCHS = 30
-BATCH_SIZE = 64  # Increased for better GPU utilization on M-series
-SEED = 42
+BATCH_SIZE = 64
 
 # DataLoader Settings for Apple Silicon
 NUM_WORKERS = 0  # Set to 0 to avoid multiprocessing issues on Mac
@@ -15,8 +30,11 @@ NUM_WORKERS = 0  # Set to 0 to avoid multiprocessing issues on Mac
 # Gated AdaBoost Settings
 GATING_K = 3 # Top-k learners to select
 GATING_TAU = 1.0 # Temperature for softmax
-GATING_LR = 1e-4
-GATING_EPOCHS = 20
+GATING_LR = 1e-3
+GATING_EPOCHS = 50
+GATING_VAL_RATIO = 0.1 # 10% of training data for validation
+GATING_PATIENCE = 10 # epochs to wait before early stopping
+GATING_MIN_DELTA = 0.001 # minimum change to qualify as improvement
 LAMBDA_KL = 1.0
 LAMBDA_RANK = 0.1
 LAMBDA_SPARSE = 0.1

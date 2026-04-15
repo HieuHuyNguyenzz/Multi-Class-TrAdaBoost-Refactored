@@ -6,7 +6,7 @@ from src.config import NUM_CLASSES, DEVICE
 class GatingNetwork(nn.Module):
     def __init__(self, input_shape, num_learners):
         """
-        Gating Network to select top-k weak learners.
+        CNN-based Gating Network to select top-k weak learners.
         
         Args:
             input_shape (tuple): (packet_num, num_features)
@@ -14,24 +14,42 @@ class GatingNetwork(nn.Module):
         """
         super(GatingNetwork, self).__init__()
         
-        # Flatten the input features
-        # input_shape = (20, 256) -> 5120
-        flatten_dim = input_shape[0] * input_shape[1]
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         
-        self.net = nn.Sequential(
-            nn.Linear(flatten_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_learners)
-        )
+        self.flatten_dim = self._get_flatten_dim(input_shape)
         
-    def forward(self, x):
-        # x: (batch, h, w) -> (batch, h*w)
-        if x.dim() == 3:
-            x = x.reshape(x.size(0), -1)
-        elif x.dim() == 4: # (batch, 1, h, w)
-            x = x.reshape(x.size(0), -1)
+        self.fc1 = nn.Linear(self.flatten_dim, 256)
+        self.dropout1 = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(256, 128)
+        self.dropout2 = nn.Dropout(0.3)
+        self.fc3 = nn.Linear(128, num_learners)
+        
+    def _get_flatten_dim(self, input_shape):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, *input_shape)
+            x = self.pool(F.relu(self.conv1(x)))
+            x = self.pool(F.relu(self.conv2(x)))
+            x = F.relu(self.conv3(x))
+            x = self.pool(x)
+            return x.numel()
             
-        return self.net(x)
+    def forward(self, x):
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+        
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = F.relu(self.conv3(x))
+        x = self.pool(x)
+        
+        x = torch.flatten(x, start_dim=1)
+        x = F.relu(self.fc1(x))
+        x = self.dropout1(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout2(x)
+        x = self.fc3(x)
+        
+        return x

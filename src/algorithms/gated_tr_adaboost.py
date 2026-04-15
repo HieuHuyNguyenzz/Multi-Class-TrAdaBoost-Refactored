@@ -7,7 +7,8 @@ from torch.utils.data import DataLoader
 from src.config import (
     DEVICE, BATCH_SIZE, NUM_CLASSES, 
     GATING_K, GATING_TAU, GATING_LR, GATING_EPOCHS,
-    LAMBDA_KL, LAMBDA_SPARSE, NUM_WORKERS
+    GATING_VAL_RATIO, GATING_PATIENCE, GATING_MIN_DELTA,
+    NUM_WORKERS
 )
 from src.models.gating_net import GatingNetwork
 from src.utils.dataset import ETCDataset
@@ -21,49 +22,90 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
         super().__init__(model_class, n_estimators)
         self.gate = None
     
-    def train_gate(self, X_train, y_train):
+    def train_gate(self, X_train, y_train, X_source=None, y_source=None):
         """
-        Train the gating network based on learner contributions.
+        Train the gating network using multi-label classification.
+        The gate learns to predict which learners should be in top-k.
+        
+        Args:
+            X_train: Target domain training data
+            y_train: Target domain labels
+            X_source: Source domain data (optional)
+            y_source: Source domain labels (optional)
         """
-        print("Generating contribution labels for Gating Network...")
-        preds = self._get_all_predictions(X_train) 
+        print("Generating multi-label ground truth for Gating Network...")
+        
+        # Use both target and source data if provided
+        if X_source is not None and y_source is not None:
+            X_combined = np.concatenate([X_train, X_source], axis=0)
+            y_combined = np.concatenate([y_train, y_source], axis=0)
+            print(f"  Using target ({len(X_train)}) + source ({len(X_source)}) = {len(X_combined)} samples")
+        else:
+            X_combined = X_train
+            y_combined = y_train
+            print(f"  Using {len(X_combined)} samples")
+        
+        preds = self._get_all_predictions(X_combined) 
         alphas = np.array(self.alphas) 
         
-        contributions = (preds == y_train[:, np.newaxis]) * alphas
+        contributions = (preds == y_combined[:, np.newaxis]) * alphas
         
-        exp_c = np.exp(contributions / GATING_TAU)
-        q = exp_c / np.sum(exp_c, axis=1, keepdims=True)
-        q_tensor = torch.from_numpy(q).float().to(DEVICE)
+        # Multi-label: create binary labels (learner in top-k = 1, else = 0)
+        k = 3
+        top_k_idx = np.argsort(contributions, axis=1)[:, -k:]
+        binary_labels = np.zeros((len(X_combined), self.n_estimators), dtype=np.float32)
+        for i, row in enumerate(top_k_idx):
+            binary_labels[i, row] = 1.0
         
-        X_dataset = ETCDataset(X_train, y_train)
+        binary_labels_tensor = torch.from_numpy(binary_labels).float().to(DEVICE)
+        
+        X_dataset = ETCDataset(X_combined, y_combined)
         dataloader = DataLoader(X_dataset, batch_size=BATCH_SIZE, shuffle=True, 
                                num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
         
         self.gate = GatingNetwork(input_shape=X_train[0].shape, num_learners=self.n_estimators).to(DEVICE)
         optimizer = optim.Adam(self.gate.parameters(), lr=GATING_LR)
+        criterion = nn.BCEWithLogitsLoss()
         
-        print("Training Gating Network...")
+        print("Training Gating Network (multi-label)...")
         self.gate.train()
         for epoch in range(GATING_EPOCHS):
             total_loss = 0
+            correct = 0
+            total = 0
+            
             for i, (data, _) in enumerate(dataloader):
                 data = data.to(DEVICE)
-                batch_q = q_tensor[i*BATCH_SIZE : (i+1)*BATCH_SIZE]
-                if batch_q.size(0) == 0: continue
+                batch_idx = i * BATCH_SIZE
+                if batch_idx >= len(binary_labels_tensor):
+                    break
+                batch_labels = binary_labels_tensor[batch_idx : batch_idx + BATCH_SIZE]
+                if batch_labels.size(0) == 0:
+                    continue
                 
                 optimizer.zero_grad()
                 p_logits = self.gate(data)
-                p = torch.softmax(p_logits, dim=1)
                 
-                kl_loss = torch.sum(batch_q * (torch.log(batch_q + 1e-10) - torch.log(p + 1e-10)), dim=1).mean()
-                sparse_loss = torch.sum(p * torch.log(p + 1e-10), dim=1).mean()
-                
-                loss = LAMBDA_KL * kl_loss + LAMBDA_SPARSE * sparse_loss
+                loss = criterion(p_logits, batch_labels)
                 loss.backward()
                 optimizer.step()
+                
                 total_loss += loss.item()
                 
-            print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {total_loss/len(dataloader):.4f}")
+                # Calculate top-k accuracy (how often correct learners are in predicted top-k)
+                p_probs = torch.sigmoid(p_logits)
+                _, topk_pred = torch.topk(p_probs, k, dim=1)
+                batch_range = torch.arange(batch_labels.size(0)).to(DEVICE)
+                # Check if target learners are in predicted top-k
+                for b in range(batch_labels.size(0)):
+                    target_set = set(torch.where(batch_labels[b] > 0.5)[0].tolist())
+                    pred_set = set(topk_pred[b].tolist())
+                    if target_set & pred_set:  # intersection
+                        correct += 1
+                    total += 1
+            
+            accuracy = 100 * correct / total if total > 0 else 0
+            print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {total_loss/max(1, len(dataloader)):.4f}, Top-{k} Acc: {accuracy:.2f}%")
     
     def predict_sparse(self, X_test, k=None, return_time=False):
         """

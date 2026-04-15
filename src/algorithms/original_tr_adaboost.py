@@ -48,7 +48,7 @@ class MultiClassTrAdaBoostCNN:
             
             # Step 2.2: Train CNNModel (weak learner) on combined data
             learner = self.model_class(input_shape=X_combined[0].shape, num_classes=NUM_CLASSES).to(DEVICE)
-            optimizer = optim.Adam(learner.parameters(), lr=1e-4)
+            optimizer = optim.Adam(learner.parameters(), lr=1e-3)
             criterion = nn.CrossEntropyLoss()
             
             learner.train()

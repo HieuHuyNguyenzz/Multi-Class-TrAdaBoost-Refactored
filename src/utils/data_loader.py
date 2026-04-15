@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from src.config import NUM_FEATURE, PACKET_NUM
+from src.config import NUM_FEATURE, PACKET_NUM, SEED
 
 def data_processing(df):
     """
@@ -41,18 +41,20 @@ def load_source_data(path):
         print(f"Error loading source data from {path}: {e}")
         return None, None
 
-def load_target_data(path, test_ratio=0.2, seed=42):
+def load_target_data(path, test_ratio=0.2, seed=None):
     """
     Loads target domain data and splits into train/test.
     
     Args:
         path: Path to target domain feather file.
         test_ratio: Ratio of data for testing (default 0.2 = 20%).
-        seed: Random seed for reproducibility.
+        seed: Random seed for reproducibility. Defaults to config SEED.
         
     Returns:
         tuple: (train_X, train_y, test_X, test_y)
     """
+    if seed is None:
+        seed = SEED
     try:
         df = pd.read_feather(path)
         X, y = data_processing(df)
