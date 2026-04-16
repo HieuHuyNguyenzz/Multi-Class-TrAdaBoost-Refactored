@@ -7,7 +7,7 @@ import time
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import OneCycleLR
 from src.config import (
-    DEVICE, BATCH_SIZE, NUM_CLASSES, 
+    DEVICE, BATCH_SIZE, NUM_CLASSES, NUM_ESTIMATORS,
     GATING_K, GATING_TAU, GATING_LR, GATING_EPOCHS,
     GATING_VAL_RATIO, GATING_PATIENCE, GATING_MIN_DELTA,
     GATING_GRAD_CLIP, GATING_LAMBDA_LB, GATING_WEIGHT_DECAY,
@@ -69,7 +69,7 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
     """
     Improved Multi-class TrAdaBoost with Gating Network for Sparse Inference.
     """
-    def __init__(self, model_class, n_estimators=10):
+    def __init__(self, model_class, n_estimators=NUM_ESTIMATORS):
         super().__init__(model_class, n_estimators)
         self.gate = None
     

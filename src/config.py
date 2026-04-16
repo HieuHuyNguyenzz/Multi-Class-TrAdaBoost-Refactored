@@ -20,9 +20,10 @@ set_seed(SEED)
 NUM_FEATURE = 32
 NUM_CLASSES = 3
 PACKET_NUM = 20
-CLIENT_LR = 1e-4
+CLIENT_LR = 1e-3
 NUM_EPOCHS = 30
 BATCH_SIZE = 64
+NUM_ESTIMATORS = 10  # Number of weak learners in ensemble
 
 # DataLoader Settings for Apple Silicon
 NUM_WORKERS = 0  # Set to 0 to avoid multiprocessing issues on Mac

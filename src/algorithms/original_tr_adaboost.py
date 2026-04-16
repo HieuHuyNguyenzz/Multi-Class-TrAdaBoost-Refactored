@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from src.config import DEVICE, BATCH_SIZE, NUM_EPOCHS, NUM_CLASSES, NUM_WORKERS
+from src.config import DEVICE, BATCH_SIZE, NUM_EPOCHS, NUM_CLASSES, NUM_WORKERS, NUM_ESTIMATORS
 from src.utils.dataset import ETCDataset
 
 # Optimize pin_memory for CUDA only (MPS doesn't benefit from it)
@@ -14,7 +14,7 @@ class MultiClassTrAdaBoostCNN:
     """
     Original Multi-class TrAdaBoost with CNN as weak learner.
     """
-    def __init__(self, model_class, n_estimators=10):
+    def __init__(self, model_class, n_estimators=NUM_ESTIMATORS):
         self.model_class = model_class
         self.n_estimators = n_estimators
         self.learners = []

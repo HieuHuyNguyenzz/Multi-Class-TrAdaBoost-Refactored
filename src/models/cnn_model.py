@@ -34,25 +34,19 @@ class CNNModel(nn.Module):
         with torch.no_grad():
             # dummy input: (batch, channel, height, width)
             x = torch.zeros(1, 1, *input_shape)
-            x = self.pool(F.relu(self.conv1(x)))
-            x = self.pool(F.relu(self.conv2(x)))
-            x = F.relu(self.conv3(x))
-            x = self.pool(F.relu(self.conv4(x)))
-            x = F.relu(self.conv5(x))
-            x = self.pool(F.relu(self.conv6(x)))
+            x = self.pool(F.relu(self.conv2(F.relu(self.conv1(x)))))   # pool sau cặp conv1-conv2
+            x = self.pool(F.relu(self.conv4(F.relu(self.conv3(x)))))   # pool sau cặp conv3-conv4
+            x = self.pool(F.relu(self.conv6(F.relu(self.conv5(x)))))   # pool sau cặp conv5-conv6
             return x.numel()
             
     def forward(self, x):
         # Add channel dimension if missing: (batch, h, w) -> (batch, 1, h, w)
         if x.dim() == 3:
             x = x.unsqueeze(1)
-            
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = F.relu(self.conv3(x))
-        x = self.pool(F.relu(self.conv4(x)))
-        x = F.relu(self.conv5(x))
-        x = self.pool(F.relu(self.conv6(x)))
+        
+        x = self.pool(F.relu(self.conv2(F.relu(self.conv1(x)))))   # pool sau cặp conv1-conv2
+        x = self.pool(F.relu(self.conv4(F.relu(self.conv3(x)))))   # pool sau cặp conv3-conv4
+        x = self.pool(F.relu(self.conv6(F.relu(self.conv5(x)))))   # pool sau cặp conv5-conv6
         
         x = torch.flatten(x, start_dim=1)
         x = F.relu(self.fc1(x))

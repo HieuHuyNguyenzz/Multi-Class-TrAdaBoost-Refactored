@@ -2,7 +2,7 @@ import numpy as np
 import os
 import argparse
 from sklearn.metrics import classification_report
-from src.config import SOURCE_PATH, TARGET_PATH, TARGET_TEST_RATIO, DEVICE, set_seed, SEED
+from src.config import SOURCE_PATH, TARGET_PATH, TARGET_TEST_RATIO, DEVICE, set_seed, SEED, NUM_ESTIMATORS
 from src.utils.data_loader import load_source_data, load_target_data
 from src.models.cnn_model import CNNModel
 from src.algorithms.original_tr_adaboost import MultiClassTrAdaBoostCNN
@@ -52,11 +52,11 @@ def main():
             os.remove(GATED_MODEL_PATH)
     
     # --- Setup Models ---
-    model_orig = MultiClassTrAdaBoostCNN(CNNModel, n_estimators=10)
+    model_orig = MultiClassTrAdaBoostCNN(CNNModel, n_estimators=NUM_ESTIMATORS)
     
     # Only create gated model if needed
     if args.mode not in ['tradaboost_only']:
-        model_gated = GatedMultiClassTrAdaBoostCNN(CNNModel, n_estimators=10)
+        model_gated = GatedMultiClassTrAdaBoostCNN(CNNModel, n_estimators=NUM_ESTIMATORS)
     
     # 1. Handle Original Model
     if args.mode == 'train_full' or args.mode == 'tradaboost_only':
