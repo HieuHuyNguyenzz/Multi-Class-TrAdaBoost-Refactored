@@ -17,7 +17,7 @@ SEED = 42
 set_seed(SEED)
 
 # General Settings
-NUM_FEATURE = 32
+NUM_FEATURE = 256
 NUM_CLASSES = 3
 PACKET_NUM = 20
 CLIENT_LR = 1e-3
@@ -33,7 +33,7 @@ GATING_K = 3 # Top-k learners to select
 GATING_TAU = 1.0 # Temperature for softmax
 GATING_LR = 1e-3
 GATING_WEIGHT_DECAY = 1e-2
-GATING_EPOCHS = 50
+GATING_EPOCHS = 30
 GATING_GRAD_CLIP = 1.0 # gradient clipping
 GATING_LAMBDA_LB = 0.01 # load balancing loss weight
 LAMBDA_KL = 1.0
@@ -51,6 +51,7 @@ else:
 
 # Data Paths
 DATA_DIR = "Data"
-SOURCE_PATH = f"{DATA_DIR}/Domain 1_32.feather"
-TARGET_PATH = f"{DATA_DIR}/Domain 2_32.feather"
-TARGET_TEST_RATIO = 0.97  # 98% of target domain for testing (only 2% for training - limited target data scenario)
+SOURCE_PATH = f"{DATA_DIR}/Domain 1_256.feather"
+TARGET_PATH = f"{DATA_DIR}/Domain 2_256.feather"
+TARGET_TEST_RATIO = 0.90  # 90% of target domain for testing
+TARGET_TRAIN_LABELED_RATIO = 0.2  # 20% of the training 10% is labeled, 80% is unlabeled

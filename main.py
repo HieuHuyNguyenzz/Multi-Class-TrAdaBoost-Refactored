@@ -1,8 +1,9 @@
 import numpy as np
 import os
 import argparse
+import src.config as config
 from sklearn.metrics import classification_report
-from src.config import SOURCE_PATH, TARGET_PATH, TARGET_TEST_RATIO, DEVICE, set_seed, SEED, NUM_ESTIMATORS
+from src.config import SOURCE_PATH, TARGET_PATH, TARGET_TEST_RATIO, DEVICE, set_seed, SEED, NUM_ESTIMATORS, GATING_K
 from src.utils.data_loader import load_source_data, load_target_data
 from src.models.cnn_model import CNNModel
 from src.algorithms.original_tr_adaboost import MultiClassTrAdaBoostCNN
@@ -19,25 +20,41 @@ def main():
                              "'tradaboost_only' to train/test only original TrAdaBoost, "
                              "'test_no_gating' for full ensemble evaluation, 'test_with_gating' for sparse evaluation, "
                              "'test' for both.")
+    parser.add_argument('--gate_data', type=str, default='both',
+                        choices=['both', 'target_only'],
+                        help="Data to use for training the gating network: 'both' (source + target) or 'target_only'.")
+    parser.add_argument('--use_semi', action='store_true',
+                        help="Whether to use semi-supervised pre-training with unlabeled target data.")
+    parser.add_argument('--use_soft_labels', action='store_true',
+                        help="Whether to use weighted soft labels instead of binary oracle labels for gating training.")
     args = parser.parse_args()
 
     print(f"Using device: {DEVICE}")
     print(f"Execution Mode: {args.mode}")
+
+    # Print config compactly
+    print("\n[Config]")
+    gen = [f"{k}={v}" for k, v in vars(config).items() if k.isupper() and not k.startswith(('GATING_', 'LAMBDA_', 'SOURCE_', 'TARGET_', 'DATA_'))]
+    gat = [f"{k}={v}" for k, v in vars(config).items() if k.isupper() and (k.startswith(('GATING_', 'LAMBDA_')))]
+    pth = [f"{k}={v}" for k, v in vars(config).items() if k.isupper() and (k.startswith(('SOURCE_', 'TARGET_', 'DATA_')))]
+    print(f" General: {', '.join(gen)}")
+    print(f" Gating: {', '.join(gat)}")
+    print(f" Paths: {', '.join(pth)}")
     
     print("\nLoading data...")
     # Source domain: Full dataset for training
     source_X, source_y = load_source_data(SOURCE_PATH)
     
-    # Target domain: Split into train/test
-    target_train_X, target_train_y, test_X, test_y = load_target_data(TARGET_PATH, TARGET_TEST_RATIO)
+    # Target domain: Split into labeled, unlabeled, and test
+    target_labeled_X, target_labeled_y, target_unlabeled_X, target_unlabeled_y, test_X, test_y = load_target_data(TARGET_PATH, TARGET_TEST_RATIO)
     
-    if source_X is None or target_train_X is None or test_X is None:
+    if source_X is None or target_labeled_X is None or test_X is None:
         print("Error loading datasets. Please check paths in src/config.py")
         return
 
-    input_shape = target_train_X[0].shape
+    input_shape = target_labeled_X[0].shape
     print(f"\nSource domain (Domain 1): {source_X.shape} flows")
-    print(f"Target domain (Domain 2): Train {target_train_X.shape}, Test {test_X.shape}")
+    print(f"Target domain (Domain 2): Labeled {target_labeled_X.shape}, Unlabeled {target_unlabeled_X.shape}, Test {test_X.shape}")
     
     # Paths for saving models
     ORIG_MODEL_PATH = "model_orig.pth"
@@ -50,6 +67,10 @@ def main():
             os.remove(ORIG_MODEL_PATH)
         if os.path.exists(GATED_MODEL_PATH):
             os.remove(GATED_MODEL_PATH)
+    elif args.mode == 'train_gate':
+        if os.path.exists(GATED_MODEL_PATH):
+            print("Removing existing gated model file...")
+            os.remove(GATED_MODEL_PATH)
     
     # --- Setup Models ---
     model_orig = MultiClassTrAdaBoostCNN(CNNModel, n_estimators=NUM_ESTIMATORS)
@@ -61,7 +82,7 @@ def main():
     # 1. Handle Original Model
     if args.mode == 'train_full' or args.mode == 'tradaboost_only':
         print("\nTraining Original TrAdaBoost Model...")
-        model_orig.fit(target_train_X, target_train_y, source_X, source_y)
+        model_orig.fit(target_labeled_X, target_labeled_y, source_X, source_y)
         model_orig.save(ORIG_MODEL_PATH, input_shape)
     elif os.path.exists(ORIG_MODEL_PATH):
         print("Loading pre-trained Original Model...")
@@ -91,7 +112,12 @@ def main():
         model_gated.n_estimators = model_orig.n_estimators
         
         print("\nTraining Gating Network for Sparse Inference...")
-        model_gated.train_gate(target_train_X, target_train_y, source_X, source_y)
+        # Use source data only if --gate_data is 'both'
+        s_X, s_y = (source_X, source_y) if args.gate_data == 'both' else (None, None)
+        
+        # Only pass unlabeled data if --use_semi flag is set
+        u_X = target_unlabeled_X if args.use_semi else None
+        model_gated.train_gate(target_labeled_X, target_labeled_y, s_X, s_y, X_unlabeled=u_X, use_soft_labels=args.use_soft_labels)
         model_gated.save(GATED_MODEL_PATH, input_shape)
         
     elif args.mode == 'train_gate':
@@ -108,7 +134,12 @@ def main():
             return
             
         print("\nRe-training Gating Network...")
-        model_gated.train_gate(target_train_X, target_train_y, source_X, source_y)
+        # Use source data only if --gate_data is 'both'
+        s_X, s_y = (source_X, source_y) if args.gate_data == 'both' else (None, None)
+        
+        # Only pass unlabeled data if --use_semi flag is set
+        u_X = target_unlabeled_X if args.use_semi else None
+        model_gated.train_gate(target_labeled_X, target_labeled_y, s_X, s_y, X_unlabeled=u_X, use_soft_labels=args.use_soft_labels)
         model_gated.save(GATED_MODEL_PATH, input_shape)
     else:
         if os.path.exists(GATED_MODEL_PATH):
@@ -138,7 +169,7 @@ def main():
         print(" EVALUATION WITH GATING (Sparse Inference) ")
         print("="*60)
         
-        k_values = [3, 5, 7]
+        k_values = [GATING_K]
         k_values = [min(k, model_gated.n_estimators) for k in k_values]
         
         for k in k_values:

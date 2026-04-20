@@ -6,13 +6,14 @@ import torch.nn.functional as F
 import time
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import OneCycleLR
+from sklearn.cluster import KMeans
 from src.config import (
     DEVICE, BATCH_SIZE, NUM_CLASSES, NUM_ESTIMATORS,
     GATING_K, GATING_TAU, GATING_LR, GATING_EPOCHS,
     GATING_GRAD_CLIP, GATING_LAMBDA_LB, GATING_WEIGHT_DECAY,
     NUM_WORKERS
 )
-from src.models.gating_net import GatingNetwork
+from src.models.gating_net import GatingNetwork, GatingCNN
 from src.utils.dataset import ETCDataset
 from src.algorithms.original_tr_adaboost import MultiClassTrAdaBoostCNN, PIN_MEMORY
 
@@ -72,17 +73,72 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
         super().__init__(model_class, n_estimators)
         self.gate = None
     
-    def train_gate(self, X_train, y_train, X_source=None, y_source=None):
+    def pretrain_gate(self, X_unlabeled):
+        """
+        Pre-trains the gating network using K-Means clustering on unlabeled target data.
+        The cluster IDs act as pseudo-labels for experts.
+        """
+        if self.gate is None:
+            self.gate = GatingCNN(input_shape=X_unlabeled[0].shape, num_learners=self.n_estimators).to(DEVICE)
+        
+        print(f"  Performing K-Means clustering on {len(X_unlabeled)} samples...")
+        # Flatten data for KMeans: (N, 20, 256) -> (N, 20*256)
+        X_flat = X_unlabeled.reshape(len(X_unlabeled), -1)
+        
+        kmeans = KMeans(n_clusters=self.n_estimators, random_state=42, n_init='auto')
+        cluster_ids = kmeans.fit_predict(X_flat)
+        
+        # Convert cluster IDs to one-hot labels (N, num_estimators)
+        pseudo_labels = np.zeros((len(X_unlabeled), self.n_estimators), dtype=np.float32)
+        pseudo_labels[np.arange(len(X_unlabeled)), cluster_ids] = 1.0
+        pseudo_labels_tensor = torch.from_numpy(pseudo_labels).float().to(DEVICE)
+        
+        # Data Loader for unlabeled data
+        train_dataset = ETCDataset(X_unlabeled, np.zeros(len(X_unlabeled))) # y is not used
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                                  num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
+        
+        optimizer = optim.Adam(self.gate.parameters(), lr=GATING_LR)
+        criterion = nn.BCEWithLogitsLoss()
+        
+        print(f"  Training Gating Network on pseudo-labels (K-Means) for {GATING_EPOCHS // 2} epochs...")
+        self.gate.train()
+        for epoch in range(GATING_EPOCHS // 2):
+            total_loss = 0
+            for i, (data, _) in enumerate(train_loader):
+                data = data.to(DEVICE)
+                batch_idx = i * BATCH_SIZE
+                if batch_idx >= len(pseudo_labels_tensor):
+                    break
+                batch_labels = pseudo_labels_tensor[batch_idx : batch_idx + BATCH_SIZE]
+                
+                optimizer.zero_grad()
+                logits = self.gate(data)
+                loss = criterion(logits, batch_labels)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                print(f"    Pre-train Epoch {epoch+1}, Loss: {total_loss/len(train_loader):.4f}")
+
+    def train_gate(self, X_train, y_train, X_source=None, y_source=None, X_unlabeled=None, use_soft_labels=True):
         """
         Train the gating network following the MoE design document.
-        Uses supervised oracle labels with BCE + Load Balancing Loss.
+        Optional: pre-trains with X_unlabeled using clustering.
         
         Args:
-            X_train: Target domain training data
+            X_train: Target domain training data (labeled)
             y_train: Target domain labels
             X_source: Source domain data (optional)
             y_source: Source domain labels (optional)
+            X_unlabeled: Target domain unlabeled data for pre-training (optional)
+            use_soft_labels: Whether to use weighted soft labels or binary oracle labels.
         """
+        if X_unlabeled is not None:
+            print("\n[Semi-supervised] Starting pre-training on unlabeled data...")
+            self.pretrain_gate(X_unlabeled)
+
         print("Generating oracle labels for Gating Network...")
         
         # Use both target and source data if provided
@@ -101,20 +157,27 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
         
         contributions = (preds == y_combined[:, np.newaxis]) * alphas
         
-        # Multi-label: create binary labels (learner in top-k = 1, else = 0)
-        k = 3
-        top_k_idx = np.argsort(contributions, axis=1)[:, -k:]
-        binary_labels = np.zeros((len(X_combined), self.n_estimators), dtype=np.float32)
-        for i, row in enumerate(top_k_idx):
-            binary_labels[i, row] = 1.0
+        if use_soft_labels:
+            # Normalize contributions to [0, 1] range (Soft Labels)
+            row_sums = contributions.sum(axis=1, keepdims=True)
+            binary_labels = contributions / (row_sums + 1e-8)
+            binary_labels = binary_labels.astype(np.float32)
+        else:
+            # Multi-label: create binary labels (learner in top-k = 1, else = 0)
+            # Use a fixed k=3 for binary labels as per original design
+            k = 3
+            top_k_idx = np.argsort(contributions, axis=1)[:, -k:]
+            binary_labels = np.zeros((len(X_combined), self.n_estimators), dtype=np.float32)
+            for i, row in enumerate(top_k_idx):
+                binary_labels[i, row] = 1.0
         
         binary_labels_tensor = torch.from_numpy(binary_labels).float().to(DEVICE)
         
         train_dataset = ETCDataset(X_combined, y_combined)
         train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
-                                 num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
+                                  num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
         
-        self.gate = GatingNetwork(input_shape=X_train[0].shape, num_learners=self.n_estimators).to(DEVICE)
+        self.gate = GatingCNN(input_shape=X_train[0].shape, num_learners=self.n_estimators).to(DEVICE)
         
         # AdamW optimizer with weight decay
         optimizer = optim.AdamW(self.gate.parameters(), lr=GATING_LR, weight_decay=GATING_WEIGHT_DECAY)
@@ -172,12 +235,25 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
                 train_loss += loss.item()
                 train_loss_task += loss_task.item()
                 train_loss_lb += loss_lb.item()
+                
+                # Monitoring metrics every batch
+                if i % 10 == 0:
+                    with torch.no_grad():
+                        metrics = compute_gating_metrics(gate_logits, batch_labels, GATING_K)
+                        # Just log briefly or store. For now, let's print periodically.
             
             train_loss = train_loss / max(1, len(train_loader))
             train_loss_task = train_loss_task / max(1, len(train_loader))
             train_loss_lb = train_loss_lb / max(1, len(train_loader))
             
-            print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {train_loss:.4f} (Task: {train_loss_task:.4f}, LB: {train_loss_lb:.4f})")
+            # Print metrics at end of epoch
+            with torch.no_grad():
+                # Use a small sample to compute epoch metrics
+                sample_data = next(iter(train_loader))[0].to(DEVICE)
+                sample_labels = binary_labels_tensor[:sample_data.size(0)]
+                metrics = compute_gating_metrics(self.gate(sample_data), sample_labels, GATING_K)
+            
+            print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {train_loss:.4f} (Task: {train_loss_task:.4f}, LB: {train_loss_lb:.4f}) | HitRate: {metrics['topk_hit_rate']:.4f}, UtilStd: {metrics['utilization_std']:.4f}")
     
     def predict_sparse(self, X_test, k=None, return_time=False):
         """

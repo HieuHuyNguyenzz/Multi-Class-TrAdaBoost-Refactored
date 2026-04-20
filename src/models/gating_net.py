@@ -7,12 +7,6 @@ class GatingNetwork(nn.Module):
     def __init__(self, input_shape, num_learners, hidden_dim=256, dropout=0.1):
         """
         MLP-based Gating Network to select top-k weak learners.
-        
-        Args:
-            input_shape: (packet_num, num_features)
-            num_learners: Number of weak learners (n experts)
-            hidden_dim: Hidden layer dimension
-            dropout: Dropout rate
         """
         super(GatingNetwork, self).__init__()
         
@@ -36,6 +30,39 @@ class GatingNetwork(nn.Module):
             x = x.reshape(x.size(0), -1)
         
         return self.net(x)
+
+class GatingCNN(nn.Module):
+    def __init__(self, input_shape, num_learners, dropout=0.1):
+        """
+        Mini-CNN Gating Network to select top-k weak learners.
+        Uses GAP to reduce parameters and prevent overfitting.
+        """
+        super(GatingCNN, self).__init__()
+        
+        # Compact CNN architecture
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=5, padding=2)
+        self.conv2 = nn.Conv2d(16, 16, kernel_size=5, padding=2)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(16, num_learners)
+        
+    def forward(self, x):
+        # Add channel dimension: (batch, h, w) -> (batch, 1, h, w)
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+        
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
+        
+        # Global Average Pooling (GAP) over height and width
+        x = torch.mean(x, dim=[2, 3])
+        
+        x = self.dropout(x)
+        x = self.fc(x)
+        return x
+
 
 
 class NoisyTopKGating(nn.Module):

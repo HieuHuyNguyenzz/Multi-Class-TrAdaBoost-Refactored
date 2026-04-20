@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from src.config import NUM_FEATURE, PACKET_NUM, SEED
+from src.config import NUM_FEATURE, PACKET_NUM, SEED, TARGET_TRAIN_LABELED_RATIO
 
 def data_processing(df):
     """
@@ -43,7 +43,7 @@ def load_source_data(path):
 
 def load_target_data(path, test_ratio=0.2, seed=None):
     """
-    Loads target domain data and splits into train/test.
+    Loads target domain data and splits into labeled, unlabeled, and test sets.
     
     Args:
         path: Path to target domain feather file.
@@ -51,7 +51,7 @@ def load_target_data(path, test_ratio=0.2, seed=None):
         seed: Random seed for reproducibility. Defaults to config SEED.
         
     Returns:
-        tuple: (train_X, train_y, test_X, test_y)
+        tuple: (labeled_X, labeled_y, unlabeled_X, unlabeled_y, test_X, test_y)
     """
     if seed is None:
         seed = SEED
@@ -59,13 +59,21 @@ def load_target_data(path, test_ratio=0.2, seed=None):
         df = pd.read_feather(path)
         X, y = data_processing(df)
         
-        # Split target domain into train and test
-        X_train, X_test, y_train, y_test = train_test_split(
+        # Step 1: Split target domain into Semi-supervised (train) and Test
+        X_semi, X_test, y_semi, y_test = train_test_split(
             X, y, test_size=test_ratio, random_state=seed, stratify=y
         )
         
-        print(f"Target domain: {len(X)} samples -> Train: {len(X_train)}, Test: {len(X_test)}")
-        return X_train, y_train, X_test, y_test
+        # Step 2: Split Semi-supervised into Labeled and Unlabeled
+        X_labeled, X_unlabeled, y_labeled, y_unlabeled = train_test_split(
+            X_semi, y_semi, train_size=TARGET_TRAIN_LABELED_RATIO, random_state=seed, stratify=y_semi
+        )
+        
+        print(f"Target domain: {len(X)} samples")
+        print(f"  -> Test: {len(X_test)}")
+        print(f"  -> Semi-supervised: {len(X_semi)} (Labeled: {len(X_labeled)}, Unlabeled: {len(X_unlabeled)})")
+        
+        return X_labeled, y_labeled, X_unlabeled, y_unlabeled, X_test, y_test
     except Exception as e:
         print(f"Error loading target data from {path}: {e}")
-        return None, None, None, None
+        return None, None, None, None, None, None
