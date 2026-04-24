@@ -29,16 +29,11 @@ NUM_WORKERS = 0  # Set to 0 to avoid multiprocessing issues on Mac
 
 # Gated AdaBoost Settings
 GATING_K = 5 # Top-k learners to select
-GATING_TAU = 1.0 # Temperature for softmax
 GATING_LR = 1e-4
 GATING_WEIGHT_DECAY = 1e-2
 GATING_EPOCHS = 30
 GATING_GRAD_CLIP = 1.0 # gradient clipping
 GATING_LAMBDA_LB = 0.01 # load balancing loss weight
-LAMBDA_KL = 1.0
-LAMBDA_RANK = 0.1
-LAMBDA_SPARSE = 0.1
-LAMBDA_MARGIN = 1.0
 
 # GRPO Settings
 GRPO_G = 8 # Group size

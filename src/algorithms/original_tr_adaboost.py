@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from src.config import DEVICE, BATCH_SIZE, NUM_EPOCHS, NUM_CLASSES, NUM_WORKERS, NUM_ESTIMATORS
+from src.config import DEVICE, BATCH_SIZE, NUM_EPOCHS, NUM_CLASSES, NUM_WORKERS, NUM_ESTIMATORS, CLIENT_LR
 from src.utils.dataset import ETCDataset
 
 # Optimize pin_memory for CUDA only (MPS doesn't benefit from it)
@@ -48,7 +48,7 @@ class MultiClassTrAdaBoostCNN:
             
             # Step 2.2: Train CNNModel (weak learner) on combined data
             learner = self.model_class(input_shape=X_combined[0].shape, num_classes=NUM_CLASSES).to(DEVICE)
-            optimizer = optim.Adam(learner.parameters(), lr=1e-3)
+            optimizer = optim.Adam(learner.parameters(), lr=CLIENT_LR)
             criterion = nn.CrossEntropyLoss()
             
             learner.train()

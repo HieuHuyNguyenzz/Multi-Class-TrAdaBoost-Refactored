@@ -9,9 +9,9 @@ from torch.optim.lr_scheduler import OneCycleLR
 from sklearn.cluster import KMeans
 from src.config import (
     DEVICE, BATCH_SIZE, NUM_CLASSES, NUM_ESTIMATORS,
-    GATING_K, GATING_TAU, GATING_LR, GATING_EPOCHS,
+    GATING_K, GATING_LR, GATING_EPOCHS,
     GATING_GRAD_CLIP, GATING_LAMBDA_LB, GATING_WEIGHT_DECAY,
-    NUM_WORKERS
+    NUM_WORKERS, GRPO_EPOCHS
 )
 from src.models.gating_net import GatingNetwork, GatingCNN
 from src.utils.dataset import ETCDataset
@@ -258,7 +258,7 @@ class GatedMultiClassTrAdaBoostCNN(MultiClassTrAdaBoostCNN):
             
             print(f"Gate Epoch {epoch+1}/{GATING_EPOCHS}, Loss: {train_loss:.4f} (Task: {train_loss_task:.4f}, LB: {train_loss_lb:.4f}) | HitRate: {metrics['topk_hit_rate']:.4f}, UtilStd: {metrics['utilization_std']:.4f}")
     
-    def train_gate_grpo(self, X_train, y_train, epochs=10, lr=1e-4):
+    def train_gate_grpo(self, X_train, y_train, epochs=GRPO_EPOCHS, lr=GATING_LR):
         """
         Train the gating network using Group Relative Policy Optimization (GRPO).
         This allows the model to dynamically choose the number of experts.
